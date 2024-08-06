@@ -16,18 +16,18 @@ config:
     gamma: 0.5
   resume: False
   resume_best: False
-  id: FF++c40
+  id: v1
   loss: binary_ce
   metric: Acc
   debug: False
-#  device: "cuda:1"
+  # device: "cuda:0,1,2,3"
 #  ckpt: best_model_1000
 data:
-  train_batch_size: 32
+  train_batch_size: 48
   val_batch_size: 64
   test_batch_size: 64
-  name: FaceForensics
-  file: "./config/dataset/faceforensics.yml"
+  name: Phasel
+  file: "./config/dataset/phasel.yml"
   train_branch: "train_cfg"
   val_branch: "test_cfg"
   test_branch: "test_cfg"

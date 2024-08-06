@@ -6,6 +6,7 @@ import yaml
 import torch
 import random
 import numpy as np
+import pandas as pd
 
 from tqdm import tqdm
 from pprint import pprint
@@ -22,7 +23,7 @@ from scheduler import get_scheduler
 from trainer import AbstractTrainer, LEGAL_METRIC
 from trainer.utils import exp_recons_loss, MLLoss, reduce_tensor, center_print
 from trainer.utils import MODELS_PATH, AccMeter, AUCMeter, AverageMeter, Logger, Timer
-
+import torchvision.transforms as transforms
 
 class ExpMultiGpuTrainer(AbstractTrainer):
     def __init__(self, config, stage="Train"):
@@ -50,7 +51,7 @@ class ExpMultiGpuTrainer(AbstractTrainer):
             self.best_metric = 1.0e8
 
         # distribution
-        dist.init_process_group(config_cfg["distribute"]["backend"])
+        # dist.init_process_group(config_cfg["distribute"]["backend"], rank=0, world_size=1)
 
         # load training dataset
         train_dataset = data_cfg["file"]
@@ -59,7 +60,16 @@ class ExpMultiGpuTrainer(AbstractTrainer):
         with open(train_dataset, "r") as f:
             options = yaml.load(f, Loader=yaml.FullLoader)
         train_options = options[branch]
-        self.train_set = load_dataset(name)(train_options)
+        train_label = pd.read_csv(os.path.join(options['train_cfg']['root'], 'trainset_label.txt'))
+        train_label['path'] = options['train_cfg']['root']+ '/trainset/'+train_label['img_name']
+        self.train_set = load_dataset(name = name)(cfg = train_options, img = train_label, transforms =transforms.Compose([
+                                                transforms.Resize((299, 299)),
+                                                transforms.RandomHorizontalFlip(),
+                                                transforms.RandomVerticalFlip(),
+                                                transforms.ColorJitter(brightness=.5, hue=.3),
+                                                transforms.ToTensor(),
+                                                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+                                            ]))
         # define training sampler
         self.train_sampler = data.distributed.DistributedSampler(self.train_set)
         # wrapped with data loader
@@ -71,7 +81,14 @@ class ExpMultiGpuTrainer(AbstractTrainer):
         if self.local_rank == 0:
             # load validation dataset
             val_options = options[data_cfg["val_branch"]]
-            self.val_set = load_dataset(name)(val_options)
+            val_label = pd.read_csv(os.path.join(options['train_cfg']['root'], 'valset_label.txt'))
+            val_label['path'] = options['train_cfg']['root']+ '/valset/'+val_label['img_name']
+            self.val_set = load_dataset(name)(cfg = val_options, img = val_label,
+                                              transforms = transforms.Compose([
+                                                transforms.Resize((299, 299)),
+                                                transforms.ToTensor(),
+                                                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+                                                ]),)
             # wrapped with data loader
             self.val_loader = data.DataLoader(self.val_set, shuffle=True,
                                               num_workers=data_cfg.get("num_workers", 4),
@@ -202,7 +219,6 @@ class ExpMultiGpuTrainer(AbstractTrainer):
                     global_step = (epoch_idx - 1) * len(self.train_loader) + batch_idx
                     self.model.train()
                     I, Y = train_data
-                    I = self.train_loader.dataset.load_item(I)
                     in_I, Y = self.to_device((I, Y))
 
                     # warm-up lr
@@ -303,7 +319,6 @@ class ExpMultiGpuTrainer(AbstractTrainer):
             val_generator = tqdm(enumerate(self.val_loader, 1), position=0, leave=True)
             for val_idx, val_data in val_generator:
                 I, Y = val_data
-                I = self.val_loader.dataset.load_item(I)
                 in_I, Y = self.to_device((I, Y))
                 Y_pre = self.model(in_I)
 
